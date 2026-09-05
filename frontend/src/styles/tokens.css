@@ -1,0 +1,55 @@
+@import url('https://fonts.googleapis.com/css2?family=Zen+Maru+Gothic:wght@400;500;700;900&display=swap');
+
+:root {
+  /* Background / Surface */
+  --color-bg: #f9f5f0;
+  --color-surface: #ffffff;
+  --color-surface-alt: #f5f0eb;
+
+  /* Primary accent */
+  --color-primary-from: #e74c3c;
+  --color-primary-to: #c0392b;
+  --color-primary: #E8654A;
+  --color-primary-bg: #FFF0ED;
+
+  /* Secondary accent */
+  --color-secondary: #8b4513;
+
+  /* Text */
+  --color-text: #2c1810;
+  --color-text-muted: #8b7355;
+  --color-text-light: #a0926b;
+  --color-text-dim: #b0a595;
+  --color-text-dark: #4a3f35;
+  --color-text-darker: #3a3530;
+
+  /* Misc */
+  --color-border: #e8ddd0;
+  --color-border-light: #e8e0d8;
+  --color-shadow: rgba(139, 69, 19, 0.08);
+  --color-shadow-chat: rgba(90, 77, 63, 0.07);
+
+  /* Font */
+  --font-family: 'Zen Maru Gothic', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: var(--font-family);
+  background: linear-gradient(170deg, #f9f5f0 0%, #f0e8dd 50%, #e8dfcf 100%);
+  min-height: 100vh;
+}
+
+::-webkit-scrollbar {
+  width: 3px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d4c8b8;
+  border-radius: 3px;
+}

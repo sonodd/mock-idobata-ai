@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>井戸端会議 AI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header>
+    <h1>井戸端会議 AI</h1>
+    <nav class="tabs">
+      <button class="tab active" data-tab="register">代理AI登録</button>
+      <button class="tab" data-tab="discussion">質問・相談</button>
+    </nav>
+  </header>
+
+  <main>
+    <!-- 画面1: 代理AI登録 -->
+    <section id="tab-register" class="tab-content active">
+      <div class="section-block">
+        <h2>代理AIを登録する</h2>
+        <p class="description">ChatGPTで人格データを生成し、出力されたJSONを貼り付けてください。</p>
+
+        <textarea id="json-input" placeholder='{"nickname": "タロさん", "expertise": [...], ...}' rows="10"></textarea>
+
+        <label class="checkbox-label">
+          <input type="checkbox" id="is-self-check"> この代理AIは「自分」として登録する
+        </label>
+
+        <div class="button-group">
+          <button id="btn-preview" class="btn btn-secondary">プレビュー</button>
+          <button id="btn-register" class="btn btn-primary" disabled>登録する</button>
+        </div>
+
+        <!-- プレビュー表示 -->
+        <div id="preview-area" class="preview hidden">
+          <h3>プレビュー</h3>
+          <div id="preview-content"></div>
+          <details id="preview-prompt">
+            <summary>生成される system_prompt を確認</summary>
+            <pre id="preview-prompt-text"></pre>
+          </details>
+        </div>
+      </div>
+
+      <!-- 登録済み代理AI一覧 -->
+      <div class="section-block">
+        <h2>登録済み代理AI</h2>
+        <div id="agents-list" class="agents-grid">
+          <p class="empty-message">まだ代理AIが登録されていません。</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 画面2: 質問投稿 + 結果閲覧 -->
+    <section id="tab-discussion" class="tab-content">
+      <div class="section-block">
+        <h2>井戸端会議で相談する</h2>
+        <textarea id="question-input" placeholder="相談したいことを書いてください..." rows="4"></textarea>
+        <button id="btn-ask" class="btn btn-primary">井戸端会議で聞いてくる</button>
+      </div>
+
+      <!-- ローディング -->
+      <div id="loading" class="loading hidden">
+        <div class="spinner"></div>
+        <p>井戸端会議中です。しばらくお待ちください...</p>
+      </div>
+
+      <!-- 会話結果 -->
+      <div id="conversation-area" class="hidden">
+        <div class="section-block">
+          <h3 id="conversation-question"></h3>
+          <div id="messages-list" class="messages"></div>
+        </div>
+
+        <!-- 追加質問 -->
+        <div class="section-block">
+          <h3>追加で聞きたいことはありますか？</h3>
+          <div class="follow-up-group">
+            <textarea id="followup-input" placeholder="追加の質問を入力..." rows="2"></textarea>
+            <button id="btn-followup" class="btn btn-secondary">追加質問する</button>
+          </div>
+        </div>
+
+        <p class="disclaimer">※専門家の助言ではなく、井戸端会議としての意見です</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
