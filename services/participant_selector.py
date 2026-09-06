@@ -15,10 +15,12 @@ async def select_participants(question: str, agents: list[dict]) -> list[dict]:
     """
     min_p = int(os.getenv('MIN_PARTICIPANTS', '2'))
     max_p = int(os.getenv('MAX_PARTICIPANTS', '3'))
+    if not 1 <= min_p <= max_p <= 10:
+        raise ValueError('Participants must satisfy 1 <= MIN <= MAX <= 10')
     if len(agents) <= max_p:
         return agents
 
-    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = anthropic.AsyncAnthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=30.0, max_retries=0)
 
     # 代理AIサマリー作成
     agent_summaries = []
@@ -60,12 +62,15 @@ async def select_participants(question: str, agents: list[dict]) -> list[dict]:
 
 JSON配列で返してください: [{{"id": "uuid", "score": 85}}, ...]"""
 
-    response = await client.messages.create(
-        model=os.getenv('SCORING_MODEL', 'claude-haiku-4-5-20251001'),
-        max_tokens=500,
-        temperature=0,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    try:
+        response = await client.messages.create(
+            model=os.getenv('SCORING_MODEL', 'claude-haiku-4-5-20251001'),
+            max_tokens=500,
+            temperature=0,
+            messages=[{"role": "user", "content": prompt}],
+        )
+    finally:
+        await client.close()
 
     response_text = response.content[0].text.strip()
     # JSON部分を抽出（マークダウンコードブロック対応）

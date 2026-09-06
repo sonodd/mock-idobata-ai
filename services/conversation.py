@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import random as _random
 import uuid
@@ -13,12 +14,36 @@ import anthropic
 from database import get_db
 from services.participant_selector import select_participants
 
-# スレッドごとのインメモリSSEキュー（LLM生成中のリアルタイム配信用）
-_thread_queues: dict[str, asyncio.Queue] = {}
+logger = logging.getLogger(__name__)
 
 
-def get_thread_queue(thread_id: str) -> "asyncio.Queue | None":
-    """スレッドのインメモリキューを取得（SSEエンドポイントから呼び出し）"""
+class ConversationStream:
+    """Replayable events: each SSE subscriber has its own cursor."""
+    def __init__(self):
+        self.items = []
+        self.changed = asyncio.Condition()
+
+    async def put(self, item):
+        async with self.changed:
+            self.items.append(item)
+            self.changed.notify_all()
+
+    async def events(self):
+        cursor = 0
+        while True:
+            async with self.changed:
+                await self.changed.wait_for(lambda: cursor < len(self.items))
+                item = self.items[cursor]
+                cursor += 1
+            yield item
+            if item is None:
+                return
+
+
+_thread_queues: dict[str, ConversationStream] = {}
+
+
+def get_thread_queue(thread_id: str):
     return _thread_queues.get(thread_id)
 
 
@@ -29,13 +54,14 @@ async def _call_claude_with_retry(client, **kwargs) -> str:
 
     for attempt, delay in enumerate(delays):
         try:
-            response = client.messages.create(**kwargs)
+            response = await asyncio.to_thread(client.messages.create, **kwargs)
             return response.content[0].text
         except Exception as e:
             last_error = e
             if attempt < len(delays) - 1:
                 await asyncio.sleep(delay)
 
+    logger.warning("Generation failed after retries: %s", type(last_error).__name__)
     raise last_error
 
 
@@ -158,17 +184,18 @@ async def run_idobata_kaigi(thread_id: str):
     6. 生成完了後に一括コミット（案B: LLM生成中のDBロック取得をゼロに）
     """
     # インメモリSSEキューを作成（SSEエンドポイントがリアルタイム配信に使用）
-    queue: asyncio.Queue = asyncio.Queue()
+    queue = ConversationStream()
     _thread_queues[thread_id] = queue
 
     db = get_db()
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = None
 
     # DB一括コミット用バッファ
     messages_to_insert: list[tuple] = []
     reactions_to_update: list[tuple] = []
 
     try:
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=30.0, max_retries=0)
         # 1. スレッド情報取得
         thread = _get_thread(db, thread_id)
         question = thread["question"]
@@ -360,11 +387,12 @@ async def run_idobata_kaigi(thread_id: str):
                 row,
             )
         db.execute(
-            "UPDATE threads SET status = ? WHERE id = ?", ("completed", thread_id)
+            "UPDATE threads SET status = ? WHERE id = ?", ("completed" if messages_to_insert else "error", thread_id)
         )
         db.commit()
 
-    except Exception:
+    except Exception as exc:
+        logger.warning("Conversation failed: %s", type(exc).__name__)
         # §6.3: 全リトライ失敗等でstatus=error
         try:
             db.execute(
@@ -378,6 +406,8 @@ async def run_idobata_kaigi(thread_id: str):
         await queue.put(None)
         _thread_queues.pop(thread_id, None)
         db.close()
+        if client is not None:
+            await asyncio.to_thread(client.close)
 
 
 async def run_follow_up(thread_id: str, follow_up_question: str):
@@ -387,17 +417,18 @@ async def run_follow_up(thread_id: str, follow_up_question: str):
     LLM生成中はDBに書き込まない（案B: バッファ方式）。
     """
     # インメモリSSEキューを作成
-    queue: asyncio.Queue = asyncio.Queue()
+    queue = ConversationStream()
     _thread_queues[thread_id] = queue
 
     db = get_db()
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    client = None
 
     # DB一括コミット用バッファ
     messages_to_insert: list[tuple] = []
     reactions_to_update: list[tuple] = []
 
     try:
+        client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"], timeout=30.0, max_retries=0)
         thread = _get_thread(db, thread_id)
         original_question = thread["question"]
 
@@ -424,9 +455,7 @@ async def run_follow_up(thread_id: str, follow_up_question: str):
         next_turn = max((m["turn_order"] for m in existing), default=-1) + 1
         all_messages = list(existing)
 
-        combined_question = (
-            f"{original_question}\n\n【追加質問】\n{follow_up_question}"
-        )
+        combined_question = original_question
 
         # 各参加者が追加ラウンド
         for i, participant in enumerate(participants):
@@ -532,11 +561,12 @@ async def run_follow_up(thread_id: str, follow_up_question: str):
                 row,
             )
         db.execute(
-            "UPDATE threads SET status = ? WHERE id = ?", ("completed", thread_id)
+            "UPDATE threads SET status = ? WHERE id = ?", ("completed" if messages_to_insert else "error", thread_id)
         )
         db.commit()
 
-    except Exception:
+    except Exception as exc:
+        logger.warning("Follow-up failed: %s", type(exc).__name__)
         try:
             db.execute(
                 "UPDATE threads SET status = ? WHERE id = ?", ("error", thread_id)
@@ -549,3 +579,5 @@ async def run_follow_up(thread_id: str, follow_up_question: str):
         await queue.put(None)
         _thread_queues.pop(thread_id, None)
         db.close()
+        if client is not None:
+            await asyncio.to_thread(client.close)

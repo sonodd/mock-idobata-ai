@@ -45,6 +45,7 @@ def make_mock_selector_anthropic(agent_ids: list[str], scores: list[int]) -> Mag
     agent_ids と scores を対応させた JSON を返す AsyncMock を生成する。
     """
     mock_client = MagicMock()
+    mock_client.close = AsyncMock()
     mock_response = MagicMock()
     scored = [{"id": aid, "score": s} for aid, s in zip(agent_ids, scores)]
     mock_response.content = [MagicMock(text=json.dumps(scored))]
@@ -163,6 +164,7 @@ async def test_select_fallback_invalid_json():
     agents = [make_agent(f"エージェント{i}") for i in range(5)]
 
     mock_client = MagicMock()
+    mock_client.close = AsyncMock()
     mock_response = MagicMock()
     mock_response.content = [MagicMock(text="これはJSONではありません")]
     mock_client.messages.create = AsyncMock(return_value=mock_response)
@@ -216,6 +218,7 @@ async def test_bug_2_2_label_included_in_prompt():
         return mock_response
 
     mock_client = MagicMock()
+    mock_client.close = AsyncMock()
     mock_client.messages.create = capture_create
 
     with patch(SEL_PATCH, return_value=mock_client):

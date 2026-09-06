@@ -40,7 +40,7 @@ const CHATGPT_PROMPT = `以下のJSON形式で、私の「分身AI」のプロ�
 ${JSON_SAMPLE}
 
 私の情報:
-（ここに自分の職業・経歴・趣味・価値観などを書いてください）`;
+（秘密情報や個人を特定できる情報を除き、抽象化した属性や架空の設定を書いてください）`;
 
 export default function AgentRegistrationScreen({ onComplete, onCancel }: Props) {
   const [jsonText, setJsonText] = useState('');
@@ -81,7 +81,6 @@ export default function AgentRegistrationScreen({ onComplete, onCancel }: Props)
 
   const handleSubmit = async () => {
     if (submitLockRef.current || isSubmitting) return;
-    submitLockRef.current = true;
     setError('');
 
     // JSON parse（スマートクォート正規化）
@@ -91,6 +90,9 @@ export default function AgentRegistrationScreen({ onComplete, onCancel }: Props)
         .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
         .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
       parsed = JSON.parse(normalized) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('JSON object required');
+      }
     } catch {
       setError('JSONの形式が正しくありません。構文エラーを確認してください。');
       return;
@@ -169,6 +171,7 @@ export default function AgentRegistrationScreen({ onComplete, onCancel }: Props)
       background = { label: String((parsed.background as { label: unknown }).label) };
     }
 
+    submitLockRef.current = true;
     setIsSubmitting(true);
     try {
       await createAgent({
@@ -189,7 +192,7 @@ export default function AgentRegistrationScreen({ onComplete, onCancel }: Props)
       onComplete();
     } catch (e) {
       console.error(e);
-      setError('登録に失敗しました。バックエンドとの通信を確認してください。');
+      setError(e instanceof Error ? e.message : '登録に失敗しました。');
     } finally {
       submitLockRef.current = false;
       setIsSubmitting(false);
@@ -269,7 +272,7 @@ export default function AgentRegistrationScreen({ onComplete, onCancel }: Props)
                   marginBottom: 8,
                 }}
               >
-                下のプロンプトをコピーしてChatGPTに貼り付け、最後の「私の情報」欄に自分のことを書いてください。
+                下のプロンプトをコピーしてChatGPTに貼り付け、最後の「私の情報」欄に匿名化した設定を書いてください。外部サービスに貼り付けた内容はそのサービスへ送信されます。
                 <br />
                 生成されたJSONを下のテキストエリアに貼り付けると登録できます。
               </div>

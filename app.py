@@ -4,23 +4,39 @@ import asyncio
 import json
 import os
 import uuid
+import sqlite3
+from contextlib import asynccontextmanager
+from typing import Annotated, Literal
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, StringConstraints
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from database import get_db, init_db
 from services.agent_generator import build_system_prompt, validate_agent_data
 from services.conversation import get_thread_queue, run_follow_up, run_idobata_kaigi
 from services.report_generator import generate_and_save_report
-from services.participant_selector import select_participants
 
-load_dotenv()
-app = FastAPI(title="井戸端会議AI", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app):
+    init_db()
+    conn = get_db()
+    try:
+        # Single-process local app: interrupted jobs cannot survive a restart.
+        conn.execute("UPDATE threads SET status = 'error' WHERE status = 'in_progress'")
+        conn.commit()
+    finally:
+        conn.close()
+    yield
+
+
+app = FastAPI(title="井戸端会議AI", version="0.2.0", lifespan=lifespan)
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1", "[::1]"])
 
 import os as _os
 _dist_assets = _os.path.join(_os.path.dirname(__file__), "dist", "assets")
@@ -33,31 +49,46 @@ _dist_index = _os.path.join(_os.path.dirname(__file__), "dist", "index.html")
 # --- リクエスト/レスポンスモデル ---
 
 
+ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+ProfileText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=2000)]
+QuestionText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=4000)]
+
+
+class Background(BaseModel):
+    label: Optional[ShortText] = None
+    age_group: Optional[ShortText] = None
+    occupation: Optional[ShortText] = None
+    family: Optional[ShortText] = None
+
+
+class Tone(BaseModel):
+    characteristics: ProfileText
+    samples: List[ProfileText] = Field(min_length=1, max_length=5)
+
+
 class CreateAgentRequest(BaseModel):
-    nickname: str
-    background: Optional[dict] = None
-    expertise: List[str]
-    personality: str
-    values: Optional[List[str]] = None
-    tone: dict
-    episodes: List[str]
+    nickname: ShortText
+    background: Optional[Background] = None
+    expertise: List[ShortText] = Field(min_length=1, max_length=10)
+    personality: Literal["共感型", "分析型", "実践型", "理想型"]
+    values: Optional[List[ShortText]] = Field(default=None, max_length=10)
+    tone: Tone
+    episodes: List[ProfileText] = Field(min_length=1, max_length=10)
     is_self: bool = False
 
 
 class CreateThreadRequest(BaseModel):
-    question: str
+    question: QuestionText
 
 
 class FollowUpRequest(BaseModel):
-    question: str
+    question: QuestionText
 
 
-# --- ライフサイクル ---
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
+def require_idle(conn):
+    """Call inside BEGIN IMMEDIATE to atomically reserve one generation slot."""
+    if conn.execute("SELECT 1 FROM threads WHERE status = 'in_progress' LIMIT 1").fetchone():
+        raise HTTPException(status_code=409, detail="会議を生成中です。完了後にお試しください")
 
 
 # --- エンドポイント ---
@@ -215,6 +246,8 @@ def delete_agent(agent_id: str):
     """代理AIを削除する。is_self=True のエージェントは削除不可（403）。"""
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        require_idle(conn)
         row = conn.execute(
             "SELECT id, is_self FROM agent_profiles WHERE id = ?", (agent_id,)
         ).fetchone()
@@ -222,7 +255,10 @@ def delete_agent(agent_id: str):
             raise HTTPException(status_code=404, detail="Agent not found")
         if row["is_self"]:
             raise HTTPException(status_code=403, detail="自分自身のエージェントは削除できません")
-        conn.execute("DELETE FROM agent_profiles WHERE id = ?", (agent_id,))
+        try:
+            conn.execute("DELETE FROM agent_profiles WHERE id = ?", (agent_id,))
+        except sqlite3.IntegrityError:
+            raise HTTPException(status_code=409, detail="会議履歴で使用中の代理AIです。関連する会議を削除してからお試しください") from None
         conn.commit()
     finally:
         conn.close()
@@ -238,6 +274,8 @@ def create_thread(req: CreateThreadRequest, bg: BackgroundTasks):
 
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        require_idle(conn)
         conn.execute(
             "INSERT INTO threads (id, question, status, created_at) VALUES (?, ?, ?, ?)",
             (thread_id, req.question, "in_progress", now),
@@ -321,13 +359,14 @@ async def stream_thread(thread_id: str):
 
     async def event_generator():
         # インメモリキューが存在する場合: LLM生成中 → キューからリアルタイム配信
+        seen_turns = set()
         q = get_thread_queue(thread_id)
         if q is not None:
-            while True:
-                item = await q.get()
+            async for item in q.events():
                 if item is None:
                     # Noneセンチネル = 生成完了。DBポーリングに移行
                     break
+                seen_turns.add(item["turn_order"])
                 yield f"event: message\ndata: {json.dumps(item, ensure_ascii=False)}\n\n"
 
         # DBポーリング（再接続・完了済みスレッド・キュー枯渇後の最終状態取得）
@@ -365,7 +404,9 @@ async def stream_thread(thread_id: str):
 
             if len(messages) > prev_count:
                 for msg in messages[prev_count:]:
-                    yield f"event: message\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    if msg["turn_order"] not in seen_turns:
+                        seen_turns.add(msg["turn_order"])
+                        yield f"event: message\ndata: {json.dumps(msg, ensure_ascii=False)}\n\n"
                 prev_count = len(messages)
 
             status = thread["status"]
@@ -396,37 +437,13 @@ async def stream_thread(thread_id: str):
 
 @app.get("/api/threads/{thread_id}/report")
 def get_thread_report(thread_id: str):
-    """帰還レポートを返す（存在しなければ生成して返す）"""
-    conn = get_db()
+    """保存済み発言から帰還レポートを再生成する"""
     try:
-        row = conn.execute(
-            "SELECT * FROM return_reports WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1",
-            (thread_id,),
-        ).fetchone()
-    finally:
-        conn.close()
-
-    if row:
-        return {
-            "total_turns": row["total_turns"],
-            "total_reactions": row["total_reactions"],
-            "highlight_quote": row["highlight_quote"],
-            "highlight_agent": row["highlight_agent"],
-            "hints": json.loads(row["hints"] or "[]"),
-        }
-
-    conn2 = get_db()
-    try:
-        thread = conn2.execute(
-            "SELECT status FROM threads WHERE id = ?", (thread_id,)
-        ).fetchone()
-    finally:
-        conn2.close()
-
-    if not thread:
-        raise HTTPException(status_code=404, detail="Thread not found")
-
-    return generate_and_save_report(thread_id)
+        return generate_and_save_report(thread_id)
+    except LookupError:
+        raise HTTPException(status_code=404, detail="Thread not found") from None
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from None
 
 
 @app.post("/api/threads/{thread_id}/follow-up")
@@ -434,12 +451,21 @@ def follow_up(thread_id: str, req: FollowUpRequest, bg: BackgroundTasks):
     """追加質問 → 同じ参加者で追加ラウンド"""
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
         thread = conn.execute(
             "SELECT id, status FROM threads WHERE id = ?", (thread_id,)
         ).fetchone()
         if not thread:
             raise HTTPException(status_code=404, detail="Thread not found")
 
+        require_idle(conn)
+        existing_question = conn.execute("SELECT question FROM threads WHERE id = ?", (thread_id,)).fetchone()[0]
+        if len(existing_question) + len(req.question) > 20000:
+            raise HTTPException(status_code=422, detail="会議の質問履歴が上限に達しました。新しい会議を作成してください")
+        message_count = conn.execute("SELECT COUNT(*) FROM messages WHERE thread_id = ?", (thread_id,)).fetchone()[0]
+        if message_count >= 100:
+            raise HTTPException(status_code=422, detail="会議の発言数が上限に達しました。新しい会議を作成してください")
+        conn.execute("DELETE FROM return_reports WHERE thread_id = ?", (thread_id,))
         conn.execute(
             "UPDATE threads SET status = ?, question = question || ? WHERE id = ?",
             ("in_progress", "\n\n【追加質問】" + req.question, thread_id),
@@ -453,10 +479,29 @@ def follow_up(thread_id: str, req: FollowUpRequest, bg: BackgroundTasks):
     return {"status": "in_progress"}
 
 
+@app.delete("/api/threads/{thread_id}")
+def delete_thread(thread_id: str):
+    conn = get_db()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        thread = conn.execute("SELECT status FROM threads WHERE id = ?", (thread_id,)).fetchone()
+        if not thread:
+            raise HTTPException(status_code=404, detail="Thread not found")
+        if thread["status"] == "in_progress":
+            raise HTTPException(status_code=409, detail="生成中の会議は削除できません")
+        conn.execute("DELETE FROM return_reports WHERE thread_id = ?", (thread_id,))
+        conn.execute("DELETE FROM messages WHERE thread_id = ?", (thread_id,))
+        conn.execute("DELETE FROM threads WHERE id = ?", (thread_id,))
+        conn.commit()
+    finally:
+        conn.close()
+    return {"deleted": True, "id": thread_id}
+
+
 # --- 起動 ---
 
 if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("PORT", "8000"))
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    uvicorn.run(app, host="127.0.0.1", port=port)

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import SpiritBlob from './SpiritBlob';
 import type { Agent } from '../types/agent';
 
@@ -23,13 +23,10 @@ export default function IdleScreen({ question, onQuestionChange, onSubmit, agent
   const selfAgent = agents.find((a) => a.is_self);
   const otherAgents = agents.filter((a) => !a.is_self);
 
-  const [dismissed, setDismissed] = useState(false);
-
-  useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setDismissed(window.localStorage.getItem('guideDismissed') === '1');
-    }
-  }, []);
+  const [dismissed, setDismissed] = useState(() => {
+    try { return window.localStorage.getItem('guideDismissed') === '1'; }
+    catch { return false; }
+  });
 
   const isGuideExpanded = agents.length === 0 || !dismissed;
 
@@ -37,10 +34,10 @@ export default function IdleScreen({ question, onQuestionChange, onSubmit, agent
     if (agents.length === 0) return;
     const next = !dismissed;
     setDismissed(next);
-    if (typeof window !== 'undefined') {
+    try {
       if (next) window.localStorage.setItem('guideDismissed', '1');
       else window.localStorage.removeItem('guideDismissed');
-    }
+    } catch { /* The guide still works when storage is unavailable. */ }
   };
 
   const noAgents = agents.length === 0;
@@ -213,6 +210,7 @@ export default function IdleScreen({ question, onQuestionChange, onSubmit, agent
           <span style={{ fontSize: 13 }}>📮</span> YOUR QUESTION
         </div>
         <textarea
+          maxLength={4000}
           value={question}
           onChange={(e) => onQuestionChange(e.target.value)}
           placeholder="何か相談したいことはありますか？"

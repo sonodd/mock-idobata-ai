@@ -120,7 +120,7 @@ system prompt （テンプレートで自動生成、DB に保存）
 
 ### 4.1 参加者選定（Claude Haiku）
 
-質問が投稿されると、全ペルソナの要約（ニックネーム・得意分野・背景・エピソード先頭3件）を Claude Haiku に渡し、「この人の経験がこの質問に有用な視点を提供できるか」を 0〜100 でスコアリングさせ、上位 `MAX_PARTICIPANTS` 名（デフォルト3名）を選びます。
+質問が投稿されると、自分役以外の候補ペルソナの要約（ニックネーム・得意分野・背景・エピソード先頭3件）を Claude Haiku に渡し、「この人の経験がこの質問に有用な視点を提供できるか」を 0〜100 でスコアリングさせ、上位 `MAX_PARTICIPANTS` 名（デフォルト3名）を選びます。候補数が上限以下の場合は選定APIを呼ばず全員が参加します。
 
 つまり **`expertise` と `episodes` が具体的であるほど、関連する質問に呼ばれやすくなります**。抽象的な「人生相談」より「転職を3回経験」「中学受験の伴走」のような具体語が効きます。
 
@@ -150,4 +150,10 @@ curl -X POST http://localhost:8000/api/agents \
   -d @persona.json
 ```
 
-登録後、`GET /api/agents` のレスポンスに含まれる `system_prompt` を見ると、テンプレートがどう展開されたかを直接確認できます。プロンプト調整の際は、まずここを見てから `build_system_prompt()` を触るのが近道です。
+`GET /api/agents` はプロフィールを返しますが、`system_prompt` は返しません。匿名化した `persona.json` からプロンプトを確認するには、仮想環境で次を実行します。
+
+```bash
+python -c 'import json; from services.agent_generator import build_system_prompt; print(build_system_prompt(json.load(open("persona.json"))))'
+```
+
+プロンプトには入力した個人情報も含まれ得るので、表示結果をそのまま公開しないでください。会議実行時のAnthropicへの送信、料金、保存・削除は[README](../README.md)を参照してください。実在人物を参考にした生成発言は、本人の発言や意思を表すものではありません。

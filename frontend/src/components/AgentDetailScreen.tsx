@@ -58,6 +58,9 @@ export default function AgentDetailScreen({ agent, onSave, onClose }: Props) {
         .replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, '"')
         .replace(/[\u2018\u2019\u201A\u201B\u2032\u2035]/g, "'");
       parsed = JSON.parse(normalized) as Record<string, unknown>;
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('JSON object required');
+      }
     } catch {
       setValidationError('JSONの形式が正しくありません。構文エラーを確認してください。');
       return;

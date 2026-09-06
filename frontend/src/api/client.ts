@@ -9,8 +9,11 @@ export async function apiFetch<T>(
     ...options,
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`API error ${res.status}: ${text}`);
+    const body = await res.json().catch(() => null);
+    const detail = typeof body?.detail === 'string'
+      ? body.detail
+      : res.status === 422 ? '入力の形式や文字数を確認してください' : '処理に失敗しました';
+    throw new Error(`${detail} (${res.status})`);
   }
   return res.json() as Promise<T>;
 }

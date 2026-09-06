@@ -27,17 +27,18 @@ export default function ThreadHistoryPanel({ onSelectThread }: Props) {
 
   useEffect(() => {
     if (!open) return;
-    setLoading(true);
+    let active = true;
     listThreads()
-      .then((res) => setThreads(res.threads))
+      .then((res) => { if (active) setThreads(res.threads); })
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [open]);
 
   return (
     <div style={{ marginTop: 20, borderTop: '1px solid rgba(160,140,120,0.15)', paddingTop: 12 }}>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => { if (!open) setLoading(true); setOpen((v) => !v); }}
         style={{
           background: 'none',
           border: 'none',

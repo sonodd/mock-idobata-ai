@@ -51,7 +51,7 @@ export default function ReturnReport({ report, messages, agents, selfColor, self
         },
         {
           icon: '❤️',
-          label: 'もらったリアクション',
+          label: 'リアクション（演出）',
           value: `${report.total_reactions}件`,
           detail: agents.filter((a) => !a.is_self).map((a) => a.nickname).join('・') + 'から',
         },
@@ -70,7 +70,7 @@ export default function ReturnReport({ report, messages, agents, selfColor, self
       ]
     : [
         { icon: '💬', label: '会話ターン', value: `${messages.length}回のやりとり`, detail: '議論が完了しました' },
-        { icon: '❤️', label: 'リアクション', value: `${messages.reduce((s, m) => s + (m.reactions?.length ?? 0), 0)}件`, detail: '感想が届きました' },
+        { icon: '❤️', label: 'リアクション', value: `${messages.reduce((s, m) => s + (m.reactions?.length ?? 0), 0)}件`, detail: 'ランダムな演出です' },
         { icon: '🌟', label: '印象的な発言', value: (messages[messages.length - 1]?.content ?? '').slice(0, 30) + '…', detail: '' },
         { icon: '🗺️', label: '会話完了', value: '会話ログをご確認ください', detail: '' },
       ];

@@ -13,6 +13,12 @@ def generate_and_save_report(thread_id: str) -> dict:
     """
     conn = get_db()
     try:
+        conn.execute("BEGIN IMMEDIATE")
+        thread = conn.execute("SELECT status FROM threads WHERE id = ?", (thread_id,)).fetchone()
+        if not thread:
+            raise LookupError("Thread not found")
+        if thread["status"] == "in_progress":
+            raise ValueError("会議の完了後にレポートを取得してください")
         # メッセージ取得
         rows = conn.execute(
             """SELECT m.content, m.turn_order, m.reactions,
@@ -23,9 +29,33 @@ def generate_and_save_report(thread_id: str) -> dict:
                ORDER BY m.turn_order""",
             (thread_id,),
         ).fetchall()
+        report_data = _build_report(rows)
+        now = datetime.now(timezone.utc).isoformat()
+        conn.execute("DELETE FROM return_reports WHERE thread_id = ?", (thread_id,))
+        conn.execute(
+            """INSERT INTO return_reports
+               (id, thread_id, total_turns, total_reactions,
+                highlight_quote, highlight_agent, hints, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                str(uuid.uuid4()),
+                thread_id,
+                report_data["total_turns"],
+                report_data["total_reactions"],
+                report_data["highlight_quote"],
+                report_data["highlight_agent"],
+                json.dumps(report_data["hints"], ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.commit()
     finally:
         conn.close()
 
+    return report_data
+
+
+def _build_report(rows):
     messages = [
         {
             "content": r["content"],
@@ -46,7 +76,7 @@ def generate_and_save_report(thread_id: str) -> dict:
     # highlight: リアクションが最も多いメッセージ、なければ最後のメッセージ
     if other_messages:
         highlight_msg = max(
-            other_messages, key=lambda m: len(m["reactions"]), default=other_messages[-1]
+            reversed(other_messages), key=lambda m: len(m["reactions"])
         )
     else:
         highlight_msg = messages[-1] if messages else None
@@ -87,29 +117,5 @@ def generate_and_save_report(thread_id: str) -> dict:
         "highlight_agent": highlight_agent,
         "hints": hints,
     }
-
-    # DB保存
-    conn = get_db()
-    try:
-        now = datetime.now(timezone.utc).isoformat()
-        conn.execute(
-            """INSERT OR REPLACE INTO return_reports
-               (id, thread_id, total_turns, total_reactions,
-                highlight_quote, highlight_agent, hints, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                str(uuid.uuid4()),
-                thread_id,
-                total_turns,
-                total_reactions,
-                highlight_quote,
-                highlight_agent,
-                json.dumps(hints, ensure_ascii=False),
-                now,
-            ),
-        )
-        conn.commit()
-    finally:
-        conn.close()
 
     return report_data

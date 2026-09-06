@@ -34,6 +34,7 @@ function App() {
     onError: (err: Error) => void
   ): (() => void) => {
     let acc: Message[] = [];
+    let stopFallback: (() => void) | null = null;
     const stop = streamThread(
       id,
       (msg) => { acc = [...acc, msg]; onMessages(acc); },
@@ -41,17 +42,17 @@ function App() {
       (sseErr) => {
         console.warn('SSE接続失敗、ポーリングに切替:', sseErr);
         const stopPoll = pollThread(id, onMessages, onComplete, onError);
-        stopPollRef.current = stopPoll;
+        stopFallback = stopPoll;
       }
     );
-    return stop;
+    return () => { stop(); stopFallback?.(); };
   };
 
   useEffect(() => {
     fetchAgents()
       .then((res) => setAgents(assignAgentColors(res.agents)))
       .catch(console.error);
-  }, []);
+  }, [setAgents]);
 
   useEffect(() => {
     return () => {
@@ -96,6 +97,7 @@ function App() {
       }, 1500);
     } catch (e) {
       console.error(e);
+      setErrorMessage(e instanceof Error ? e.message : '会議を開始できませんでした');
       setPhase('idle');
     }
   };
@@ -159,11 +161,13 @@ function App() {
       }, 1500);
     } catch (e) {
       console.error(e);
-      setPhase('done');
+      setErrorMessage(e instanceof Error ? e.message : '追加質問を送信できませんでした');
+      setPhase('idle');
     }
   };
 
   const handleSelectThread = async (selectedThreadId: string) => {
+    stopPollRef.current?.();
     try {
       const thread = await getThread(selectedThreadId);
       setThreadId(selectedThreadId);
@@ -235,6 +239,11 @@ function App() {
           <div style={{ fontSize: 11, color: '#9a8e82', fontFamily: "'Zen Maru Gothic', sans-serif", marginTop: 2 }}>分身が代わりに相談してきます</div>
         </div>
 
+        <p style={{ fontSize: 12, lineHeight: 1.7, color: '#75685b', margin: '12px 0' }}>
+          AIによる会話シミュレーションです。本人の発言や事実確認を表すものではありません。
+          会議を始めると、プロフィール・質問・会話履歴がAnthropicへ送信され、API料金が発生します。
+          入力内容はこの端末のサーバーに保存されます。秘密情報や、他人を特定できる情報は入力しないでください。
+        </p>
         {phase === 'registering' && (
           <AgentRegistrationScreen
             onComplete={() => {
@@ -282,7 +291,7 @@ function App() {
         {phase === 'viewing' && selectedAgent && (
           <AgentDetailScreen
             agent={selectedAgent as import('./api/agents').AgentDetail}
-            onSave={(_updated) => {
+            onSave={() => {
               fetchAgents()
                 .then((res) => setAgents(assignAgentColors(res.agents)))
                 .catch(console.error);
@@ -307,6 +316,10 @@ function App() {
         )}
         {phase === 'done' && (
           <>
+            <p style={{ fontSize: 12, lineHeight: 1.7, color: '#75685b' }}>
+              リアクションはランダムな演出です。レポートは発言の抜粋をルールで選んだもので、
+              内容の正しさや参加者の賛同を保証しません。
+            </p>
             <ReturnReport
               report={report}
               messages={messages}

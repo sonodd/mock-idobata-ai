@@ -17,5 +17,5 @@ async def client(test_db_path, monkeypatch):
     database.init_db()
     from app import app
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as ac:
+    async with AsyncClient(transport=transport, base_url="http://localhost") as ac:
         yield ac
